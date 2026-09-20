@@ -14,7 +14,7 @@ you're actively working on in In Progress, add follow-ups to Todo.
 
 ## In Progress
 
-- (empty — the next build turn picks the top open task in Todo)
+- [ ] Implement the core feature from README.md — the smallest real version that works
 
 ## Todo
 
