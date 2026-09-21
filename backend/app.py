@@ -10,7 +10,6 @@ import random
 app = Flask(__name__)
 CORS(app)
 
-DB_PATH = os.environ.get('DATABASE_PATH', '/data/seniorcare.db')
 DATA_DIR = os.environ.get('DATA_DIR', '/data/csv')
 
 DATA_RETENTION_DAYS = int(os.environ.get('DATA_RETENTION_DAYS', '365'))
@@ -18,7 +17,8 @@ CONSENT_VERSION = os.environ.get('CONSENT_VERSION', '1.0')
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    db_path = os.environ.get('DATABASE_PATH', '/data/seniorcare.db')
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -52,6 +52,7 @@ def init_db():
             description TEXT,
             status TEXT DEFAULT 'pending',
             completed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (senior_id) REFERENCES seniors (id)
         )
     ''')
@@ -98,21 +99,21 @@ def strip_phi(data):
     if not data:
         return data
 
-    phi_patterns = {
-        'name': r'\b[A-Z][a-z]+ [A-Z][a-z]+\b',
-        'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
-        'phone': r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
-        'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-        'address': r'\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\b',
-        'dob': r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b',
-        'medical_record': r'\bMRN[-\s]?\d+\b',
-    }
+    phi_patterns = [
+        ('ssn', r'\b\d{3}-\d{2}-\d{4}\b'),
+        ('phone', r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b'),
+        ('email', r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
+        ('address', r'\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\b'),
+        ('dob', r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b'),
+        ('medical_record', r'\bMRN[-\s]?\d+\b'),
+        ('name', r'\b[A-Z][a-z]+ [A-Z][a-z]+\b'),
+    ]
 
     cleaned = {}
     for key, value in data.items():
         if isinstance(value, str):
             cleaned_value = value
-            for pattern_name, pattern in phi_patterns.items():
+            for pattern_name, pattern in phi_patterns:
                 cleaned_value = re.sub(pattern, f'[REDACTED_{pattern_name.upper()}]', cleaned_value, flags=re.IGNORECASE)
             cleaned[key] = cleaned_value
         else:

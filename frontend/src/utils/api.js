@@ -46,6 +46,37 @@ export const api = {
     });
     return response.json();
   },
+
+  async getConsent(seniorId) {
+    const response = await fetch(`${API_BASE}/consent/${seniorId}`);
+    return response.json();
+  },
+
+  async updateConsent(seniorId, consentGiven) {
+    const response = await fetch(`${API_BASE}/consent/${seniorId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ consent_given: consentGiven }),
+    });
+    return response.json();
+  },
+
+  async getDisclaimer() {
+    const response = await fetch(`${API_BASE}/compliance/disclaimer`);
+    return response.json();
+  },
+
+  async runRetention() {
+    const response = await fetch(`${API_BASE}/compliance/retention`, {
+      method: 'POST',
+    });
+    return response.json();
+  },
+
+  async getRetentionLog() {
+    const response = await fetch(`${API_BASE}/compliance/retention/log`);
+    return response.json();
+  },
 };
 
 export const formatPainPoint = (point) => {
