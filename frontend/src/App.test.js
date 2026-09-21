@@ -1,4 +1,5 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom';
+import { render, screen } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material';
 import App from './App';
 
@@ -47,9 +48,9 @@ describe('App', () => {
     expect(screen.getByText('SeniorCare Pulse')).toBeInTheDocument();
   });
 
-  it('shows generate clusters button', () => {
+  it('shows find groups button', () => {
     renderWithTheme(<App />);
-    expect(screen.getByRole('button', { name: /generate clusters/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /find support groups/i })).toBeInTheDocument();
   });
 
   it('shows refresh button', () => {
@@ -59,6 +60,6 @@ describe('App', () => {
 
   it('shows voice guidance toggle', () => {
     renderWithTheme(<App />);
-    expect(screen.getByRole('button', { name: /voice guidance/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /turn off voice guidance/i })).toBeInTheDocument();
   });
 });

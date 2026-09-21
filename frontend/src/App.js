@@ -35,15 +35,15 @@ const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce
   const handleExpand = useCallback(() => {
     setExpanded(prev => !prev);
     if (!expanded) {
-      announce(`Cluster ${cluster.id + 1} expanded. ${cluster.count} seniors.`);
+      announce(`Group ${cluster.id + 1} opened. ${cluster.count} people in this group.`);
     }
   }, [expanded, cluster.id, cluster.count, announce]);
 
-  const painPointsChips = useMemo(() => {
+  const needsChips = useMemo(() => {
     if (!cluster.pain_points || cluster.pain_points.length === 0) return null;
     return (
       <div sx={{ mb: 2 }}>
-        <Typography variant="h6" sx={{ mb: 1 }}>Pain Points:</Typography>
+        <Typography variant="h6" sx={{ mb: 1 }}>Support Needs:</Typography>
         <div sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           {cluster.pain_points.map((point, index) => (
             <Chip
@@ -71,11 +71,11 @@ const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce
         {visibleSeniors.map((senior) => (
           <ListItem key={senior.id} divider sx={{ py: 1 }}>
             <ListItemText
-              primary={<Typography variant="body1">Senior #{senior.id} - Age {senior.age}</Typography>}
+              primary={<Typography variant="body1">Person #{senior.id}, Age {senior.age}</Typography>}
               secondary={
                 <Typography variant="body2">
                   Mobility: {senior.mobility_flag ? 'Needs Support' : 'Independent'} |{' '}
-                  Digital: {senior.digital_engagement ? 'Engaged' : 'Not Engaged'}
+                  Digital: {senior.digital_engagement ? 'Connected' : 'Limited Access'}
                 </Typography>
               }
             />
@@ -84,9 +84,9 @@ const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce
                 size="small"
                 variant="contained"
                 onClick={() => onActionClick(senior)}
-                aria-label={`Create action for senior ${senior.id}`}
+                aria-label={`Plan support for person ${senior.id}`}
               >
-                <Add fontSize="small" /> Action
+                <Add fontSize="small" /> Plan Support
               </Button>
             </ListItemSecondaryAction>
           </ListItem>
@@ -94,7 +94,7 @@ const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce
         {cluster.seniors.length > 10 && (
           <ListItem>
             <Typography variant="body2" color="text.secondary">
-              ... and {cluster.seniors.length - 10} more seniors
+              ... and {cluster.seniors.length - 10} more people
             </Typography>
           </ListItem>
         )}
@@ -133,10 +133,10 @@ const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce
         <Accordion expanded={expanded} onChange={handleExpand} sx={{ mt: 2 }}>
           <AccordionSummary
             expandIcon={<ExpandMoreIcon />}
-            aria-controls="cluster-details"
-            id="cluster-summary"
+            aria-controls="group-details"
+            id="group-summary"
           >
-            <Typography variant="body1">View Seniors & Actions</Typography>
+            <Typography variant="body1">View People & Plan Support</Typography>
           </AccordionSummary>
           <AccordionDetails>
             {seniorsList}
@@ -148,15 +148,15 @@ const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce
 });
 
 function ActionModal({ open, senior, onClose, onSubmit, announce }) {
-  const [actionType, setActionType] = useState('exercise');
+  const [supportType, setSupportType] = useState('exercise');
   const [description, setDescription] = useState('');
 
-  const actionTypes = [
+  const supportTypes = [
     { value: 'exercise', label: 'Exercise Class' },
     { value: 'health_check', label: 'Health Check-in' },
-    { value: 'digital_training', label: 'Digital Training' },
+    { value: 'digital_training', label: 'Digital Skills' },
     { value: 'social', label: 'Social Activity' },
-    { value: 'nutrition', label: 'Nutrition Counseling' },
+    { value: 'nutrition', label: 'Nutrition Support' },
   ];
 
   if (!open) return null;
@@ -182,21 +182,21 @@ function ActionModal({ open, senior, onClose, onSubmit, announce }) {
       <Card sx={{ maxWidth: 500, width: '90%', mx: 2 }}>
         <CardContent>
           <Typography id="modal-title" variant="h5" component="h2" sx={{ mb: 2 }}>
-            Create Action for Senior #{senior.id}
+            Plan Support for Person #{senior.id}
           </Typography>
           <Typography variant="body1" sx={{ mb: 2 }}>
-            Age: {senior.age} | Mobility: {senior.mobility_flag ? 'Needs Support' : 'Independent'} | Digital: {senior.digital_engagement ? 'Engaged' : 'Not Engaged'}
+            Age: {senior.age} | Mobility: {senior.mobility_flag ? 'Needs Support' : 'Independent'} | Digital: {senior.digital_engagement ? 'Connected' : 'Limited Access'}
           </Typography>
 
           <div sx={{ mb: 2 }}>
-            <Typography variant="body1" sx={{ mb: 1 }}>Action Type</Typography>
+            <Typography variant="body1" sx={{ mb: 1 }}>Type of Support</Typography>
             <div sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {actionTypes.map((type) => (
+              {supportTypes.map((type) => (
                 <Button
                   key={type.value}
-                  variant={actionType === type.value ? 'contained' : 'outlined'}
+                  variant={supportType === type.value ? 'contained' : 'outlined'}
                   onClick={() => {
-                    setActionType(type.value);
+                    setSupportType(type.value);
                     announce(`${type.label} selected`);
                   }}
                   fullWidth={false}
@@ -210,7 +210,7 @@ function ActionModal({ open, senior, onClose, onSubmit, announce }) {
 
           <div sx={{ mb: 2 }}>
             <label htmlFor="description" style={{ display: 'block', marginBottom: 8, fontWeight: 500, fontSize: '1.125rem' }}>
-              Description (optional)
+              Notes (optional)
             </label>
             <textarea
               id="description"
@@ -233,8 +233,8 @@ function ActionModal({ open, senior, onClose, onSubmit, announce }) {
             <Button variant="outlined" size="large" onClick={onClose}>
               Cancel
             </Button>
-            <Button variant="contained" size="large" onClick={() => onSubmit(actionType, description)}>
-              Create Action
+            <Button variant="contained" size="large" onClick={() => onSubmit(supportType, description)}>
+              Add Support Plan
             </Button>
           </div>
         </CardContent>
@@ -244,30 +244,30 @@ function ActionModal({ open, senior, onClose, onSubmit, announce }) {
 }
 
 function SeniorActionsList({ seniorId, onClose, announce }) {
-  const [actions, setActions] = useState([]);
+  const [supportPlans, setSupportPlans] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchActions = async () => {
+    const fetchPlans = async () => {
       try {
         const data = await api.getActions(seniorId);
-        setActions(data);
+        setSupportPlans(data);
       } catch (error) {
-        console.error('Failed to fetch actions:', error);
+        console.error('Failed to fetch support plans:', error);
       } finally {
         setLoading(false);
       }
     };
-    fetchActions();
+    fetchPlans();
   }, [seniorId]);
 
-  const handleComplete = async (actionId) => {
+  const handleComplete = async (planId) => {
     try {
-      await api.completeAction(actionId);
-      announce('Action marked as complete');
-      setActions(prev => prev.map(a => a.id === actionId ? { ...a, status: 'completed' } : a));
+      await api.completeAction(planId);
+      announce('Support plan marked as complete');
+      setSupportPlans(prev => prev.map(p => p.id === planId ? { ...p, status: 'completed' } : p));
     } catch (error) {
-      announce('Failed to complete action');
+      announce('Failed to complete support plan');
     }
   };
 
@@ -275,7 +275,7 @@ function SeniorActionsList({ seniorId, onClose, announce }) {
     <Card sx={{ maxWidth: 600, width: '90%', mx: 2 }}>
       <CardContent>
         <div sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-          <Typography variant="h5" component="h2">Actions for Senior #{seniorId}</Typography>
+          <Typography variant="h5" component="h2">Support Plans for Person #{seniorId}</Typography>
           <IconButton onClick={onClose} aria-label="Close">
             <HelpOutline fontSize="large" />
           </IconButton>
@@ -283,30 +283,30 @@ function SeniorActionsList({ seniorId, onClose, announce }) {
 
         {loading ? (
           <CircularProgress />
-        ) : actions.length === 0 ? (
+        ) : supportPlans.length === 0 ? (
           <Typography variant="body1" color="text.secondary" textAlign="center" sx={{ py: 4 }}>
-            No actions yet
+            No support plans yet
           </Typography>
         ) : (
           <List dense>
-            {actions.map((action) => (
-              <ListItem key={action.id} divider sx={{ py: 1 }}>
+            {supportPlans.map((plan) => (
+              <ListItem key={plan.id} divider sx={{ py: 1 }}>
                 <ListItemText
-                  primary={<Typography variant="body1">{action.action_type.replace('_', ' ')}</Typography>}
+                  primary={<Typography variant="body1">{plan.action_type.replace('_', ' ')}</Typography>}
                   secondary={
                     <Typography variant="body2">
-                      {action.description} | Status: {action.status}
-                      {action.completed_at && ` | Completed: ${new Date(action.completed_at).toLocaleDateString()}`}
+                      {plan.description} | Status: {plan.status}
+                      {plan.completed_at && ` | Completed: ${new Date(plan.completed_at).toLocaleDateString()}`}
                     </Typography>
                   }
                 />
                 <ListItemSecondaryAction>
-                  {action.status === 'pending' && (
+                  {plan.status === 'pending' && (
                     <Button
                       size="small"
                       variant="contained"
-                      onClick={() => handleComplete(action.id)}
-                      aria-label={`Complete action ${action.action_type}`}
+                      onClick={() => handleComplete(plan.id)}
+                      aria-label={`Complete ${plan.action_type}`}
                     >
                       <CheckCircle fontSize="small" /> Done
                     </Button>
@@ -371,22 +371,22 @@ function App() {
 
   const handleActionClick = (senior) => {
     setActionModal({ open: true, senior });
-    announce(`Creating action for senior ${senior.id}`);
+    announce(`Planning support for person ${senior.id}`);
   };
 
-  const handleActionSubmit = async (actionType, description) => {
+  const handleActionSubmit = async (supportType, description) => {
     try {
-      await api.createAction(actionModal.senior.id, actionType, description);
-      showSnackbar('Action created successfully', 'success');
+      await api.createAction(actionModal.senior.id, supportType, description);
+      showSnackbar('Support plan created successfully', 'success');
       setActionModal({ open: false, senior: null });
     } catch (error) {
-      showSnackbar('Failed to create action', 'error');
+      showSnackbar('Failed to create support plan', 'error');
     }
   };
 
-  const handleViewActions = (seniorId) => {
+  const handleViewPlans = (seniorId) => {
     setActionsList({ open: true, seniorId });
-    announce(`Viewing actions for senior ${seniorId}`);
+    announce(`Viewing support plans for person ${seniorId}`);
   };
 
   const handleRefresh = async () => {
@@ -401,13 +401,13 @@ function App() {
 
   useEffect(() => {
     fetchClusters();
-    announce('Welcome to SeniorCare Pulse. Dashboard loaded.');
+    announce('Welcome to SeniorCare Pulse. Your dashboard is ready.');
   }, [fetchClusters, announce]);
 
   useEffect(() => {
     if (guidanceEnabled && clusters.length > 0 && !isSpeaking) {
       const firstCluster = clusters[0];
-      announce(`First cluster has ${firstCluster.count} seniors. Recommended program: ${firstCluster.program}`);
+      announce(`First group has ${firstCluster.count} people. Suggested program: ${firstCluster.program}`);
     }
   }, [clusters, guidanceEnabled, isSpeaking, announce]);
 
@@ -420,11 +420,11 @@ function App() {
           </Typography>
           <div sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             {isSupported && (
-              <Tooltip title={guidanceEnabled ? 'Disable voice guidance' : 'Enable voice guidance'}>
+              <Tooltip title={guidanceEnabled ? 'Turn off voice guidance' : 'Turn on voice guidance'}>
                 <IconButton
                   onClick={toggleGuidance}
                   aria-pressed={guidanceEnabled}
-                  aria-label={guidanceEnabled ? 'Disable voice guidance' : 'Enable voice guidance'}
+                  aria-label={guidanceEnabled ? 'Turn off voice guidance' : 'Turn on voice guidance'}
                   sx={{ backgroundColor: guidanceEnabled ? '#fff' : 'rgba(255,255,255,0.2)', color: guidanceEnabled ? '#2E7D32' : '#fff' }}
                 >
                   {guidanceEnabled ? <VolumeUp /> : <VolumeOff />}
@@ -436,7 +436,7 @@ function App() {
                 <Refresh />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Generate clusters">
+            <Tooltip title="Find support groups">
               <Button
                 variant="contained"
                 color="secondary"
@@ -444,9 +444,9 @@ function App() {
                 onClick={handleGenerate}
                 disabled={generating}
                 size="large"
-                aria-label="Generate clusters from senior data"
+                aria-label="Find support groups from community data"
               >
-                {generating ? <CircularProgress size={20} color="inherit" /> : 'Generate Clusters'}
+                {generating ? <CircularProgress size={20} color="inherit" /> : 'Find Groups'}
               </Button>
             </Tooltip>
           </div>
@@ -464,12 +464,12 @@ function App() {
           <Card sx={{ textAlign: 'center', py: 6, px: 4 }}>
             <CardContent>
               <HelpOutline sx={{ fontSize: 64, color: '#2E7D32', mb: 2 }} />
-              <Typography variant="h4" sx={{ mb: 2 }}>No Clusters Generated</Typography>
+              <Typography variant="h4" sx={{ mb: 2 }}>No Groups Yet</Typography>
               <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 500, mx: 'auto' }}>
-                Click "Generate Clusters" to analyze senior data and create targeted program recommendations.
+                Click "Find Groups" to analyze the data and discover who needs what kind of support.
               </Typography>
               <Button variant="contained" size="large" onClick={handleGenerate} startIcon={<Add />}>
-                Generate Clusters
+                Find Groups
               </Button>
             </CardContent>
           </Card>

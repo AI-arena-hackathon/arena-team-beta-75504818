@@ -94,7 +94,7 @@ def init_db():
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS data_retention_log (
-            id PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             table_name TEXT NOT NULL,
             records_deleted INTEGER NOT NULL,
             retention_days INTEGER NOT NULL,

@@ -81,10 +81,10 @@ export const api = {
 
 export const formatPainPoint = (point) => {
   const labels = {
-    'mobility_support': 'Mobility Support Needed',
-    'digital_exclusion': 'Digital Exclusion',
-    'advanced_age_support': 'Advanced Age Support',
-    'none': 'No Specific Pain Points',
+    'mobility_support': 'Mobility Support',
+    'digital_exclusion': 'Digital Access',
+    'advanced_age_support': 'Advanced Age Care',
+    'none': 'No Specific Needs',
   };
   return labels[point] || point;
 };

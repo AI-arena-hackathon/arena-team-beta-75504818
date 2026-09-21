@@ -16,16 +16,21 @@ you're actively working on in In Progress, add follow-ups to Todo.
 - [x] Basic tests for backend endpoints
 - [x] Compliance backend: consent tracking endpoints, retention policies, PHI stripping, disclaimer API
 - [x] Compliance tests for backend features
+- [x] **Copy & tone improvements: Human-centered language across UI, voice guidance, and API labels**
+  - "Clusters" → "Groups"
+  - "Pain Points" → "Support Needs"
+  - "Seniors" → "People/Person"
+  - "Actions" → "Support Plans"
+  - "Generate Clusters" → "Find Groups"
+  - "Create Action" → "Add Support Plan"
+  - Voice announcements now sound natural and caring
+  - PHI strip labels in API softened (e.g., "Digital Exclusion" → "Digital Access")
 
 ## In Progress
-
-- [ ] Frontend: Consent banner and compliance disclaimer UI
-- [ ] Frontend: Consent management interface
 
 ## Todo
 
 - [ ] Replace the `<!-- IDEA: ... -->` placeholder at the top with a one-line summary of the actual idea
-- [ ] Add tests for compliance features (DONE - added to backend)
 - [ ] Make README.md reproduce how to run the project (commands + env vars, per .env.example)
 - [ ] Keep `.github/workflows/ci.yml` green on every push (it runs tests)
 - [ ] Wire product deploy: on CI green, build a preview (wrangler pages / docker image) and link it in README.md so judges can curl live product, not just repo
