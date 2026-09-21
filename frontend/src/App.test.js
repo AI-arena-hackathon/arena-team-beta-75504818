@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material';
 import App from './App';
 
@@ -13,19 +13,35 @@ const renderWithTheme = (component) => {
   );
 };
 
-jest.mock('./utils/api', () => ({
-  api: {
-    health: jest.fn(),
-    getClusters: jest.fn(),
-    generateClusters: jest.fn(),
-    createAction: jest.fn(),
-    getActions: jest.fn(),
-    completeAction: jest.fn(),
-    refreshData: jest.fn(),
-  },
-  formatPainPoint: (point) => point,
-  getPainPointColor: () => '#000',
-}));
+jest.mock('./utils/api', () => {
+  class MockApiError extends Error {
+    constructor(message, status, originalError) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+      this.originalError = originalError;
+    }
+  }
+  return {
+    api: {
+      health: jest.fn(),
+      getClusters: jest.fn().mockResolvedValue([]),
+      generateClusters: jest.fn(),
+      createAction: jest.fn(),
+      getActions: jest.fn().mockResolvedValue([]),
+      completeAction: jest.fn(),
+      refreshData: jest.fn(),
+      getConsent: jest.fn(),
+      updateConsent: jest.fn(),
+      getDisclaimer: jest.fn(),
+      runRetention: jest.fn(),
+      getRetentionLog: jest.fn(),
+    },
+    formatPainPoint: (point) => point,
+    getPainPointColor: () => '#000',
+    ApiError: MockApiError,
+  };
+});
 
 jest.mock('./hooks/useVoice', () => ({
   useVoiceGuidance: () => ({
@@ -61,5 +77,30 @@ describe('App', () => {
   it('shows voice guidance toggle', () => {
     renderWithTheme(<App />);
     expect(screen.getByRole('button', { name: /turn off voice guidance/i })).toBeInTheDocument();
+  });
+
+  it('shows offline indicator when network error occurs', async () => {
+    const { api, ApiError } = require('./utils/api');
+    api.getClusters.mockRejectedValueOnce(
+      new ApiError('Connection timeout', 0, new Error('Network error'))
+    );
+
+    renderWithTheme(<App />);
+    
+    await waitFor(() => {
+      expect(screen.getByText('Offline')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('ApiError', () => {
+  it('creates error with status and message', () => {
+    const { ApiError } = require('./utils/api');
+    const error = new ApiError('Test error', 500, new Error('Original'));
+    
+    expect(error.message).toBe('Test error');
+    expect(error.status).toBe(500);
+    expect(error.originalError).toBeDefined();
+    expect(error.name).toBe('ApiError');
   });
 });

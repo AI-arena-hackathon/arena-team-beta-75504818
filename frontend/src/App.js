@@ -25,9 +25,9 @@ import {
   AccordionDetails,
   ExpandMoreIcon,
 } from '@mui/material';
-import { VolumeUp, VolumeOff, Refresh, Add, CheckCircle, HelpOutline } from '@mui/icons-material';
+import { VolumeUp, VolumeOff, Refresh, Add, CheckCircle, HelpOutline, WifiOff } from '@mui/icons-material';
 import { useVoiceGuidance } from './hooks/useVoice';
-import { api, formatPainPoint, getPainPointColor } from './utils/api';
+import { api, formatPainPoint, getPainPointColor, ApiError } from './utils/api';
 
 const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce }) {
   const [expanded, setExpanded] = useState(false);
@@ -128,7 +128,7 @@ const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce
           </Typography>
         )}
 
-        {painPointsChips}
+        {needsChips}
 
         <Accordion expanded={expanded} onChange={handleExpand} sx={{ mt: 2 }}>
           <AccordionSummary
@@ -243,33 +243,70 @@ function ActionModal({ open, senior, onClose, onSubmit, announce }) {
   );
 }
 
-function SeniorActionsList({ seniorId, onClose, announce }) {
+function SeniorActionsList({ seniorId, onClose, announce, handleApiError }) {
   const [supportPlans, setSupportPlans] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const fetchPlans = async () => {
       try {
+        setLoading(true);
+        setError(null);
         const data = await api.getActions(seniorId);
-        setSupportPlans(data);
-      } catch (error) {
-        console.error('Failed to fetch support plans:', error);
+        setSupportPlans(data || []);
+      } catch (err) {
+        const message = handleApiError(err, 'Failed to fetch support plans');
+        setError(message);
+        console.error('Failed to fetch support plans:', err);
       } finally {
         setLoading(false);
       }
     };
     fetchPlans();
-  }, [seniorId]);
+  }, [seniorId, handleApiError]);
 
   const handleComplete = async (planId) => {
     try {
       await api.completeAction(planId);
       announce('Support plan marked as complete');
       setSupportPlans(prev => prev.map(p => p.id === planId ? { ...p, status: 'completed' } : p));
-    } catch (error) {
-      announce('Failed to complete support plan');
+    } catch (err) {
+      const message = handleApiError(err, 'Failed to complete support plan');
+      announce(message);
     }
   };
+
+  if (error) {
+    return (
+      <Card sx={{ maxWidth: 600, width: '90%', mx: 2 }}>
+        <CardContent>
+          <div sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="h5" component="h2">Support Plans for Person #{seniorId}</Typography>
+            <IconButton onClick={onClose} aria-label="Close">
+              <HelpOutline fontSize="large" />
+            </IconButton>
+          </div>
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+          <Button variant="contained" onClick={() => {
+            setError(null);
+            setLoading(true);
+            api.getActions(seniorId).then(data => {
+              setSupportPlans(data);
+              setLoading(false);
+            }).catch(err => {
+              setError(handleApiError(err, 'Failed to fetch support plans'));
+              setLoading(false);
+            });
+          }}>
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card sx={{ maxWidth: 600, width: '90%', mx: 2 }}>
@@ -328,7 +365,30 @@ function App() {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [actionModal, setActionModal] = useState({ open: false, senior: null });
   const [actionsList, setActionsList] = useState({ open: false, seniorId: null });
+  const [networkError, setNetworkError] = useState(false);
   const { announce, toggleGuidance, guidanceEnabled, isSpeaking, isSupported, stop } = useVoiceGuidance(true);
+
+  const handleApiError = useCallback((error, defaultMessage) => {
+    if (error instanceof ApiError) {
+      if (error.status >= 500 && error.status < 600) {
+        setNetworkError(true);
+        return 'Service temporarily unavailable. Retrying...';
+      }
+      if (error.status === 408 || error.status === 0) {
+        setNetworkError(true);
+        return 'Connection timeout. Please check your network.';
+      }
+      if (error.status === 404) {
+        return 'Resource not found';
+      }
+      if (error.status === 403) {
+        return 'Access denied';
+      }
+      return error.message;
+    }
+    setNetworkError(true);
+    return defaultMessage;
+  }, []);
 
   const showSnackbar = useCallback((message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
@@ -339,31 +399,35 @@ function App() {
     try {
       setLoading(true);
       const data = await api.getClusters();
-      setClusters(data);
+      setClusters(data || []);
+      setNetworkError(false);
       if (data.length === 0) {
-        showSnackbar('No clusters yet. Generate clusters to see recommendations.', 'warning');
+        showSnackbar('No groups yet. Generate groups to see recommendations.', 'warning');
       } else {
-        announce(`Loaded ${data.length} clusters`);
+        announce(`Loaded ${data.length} groups`);
       }
     } catch (error) {
-      showSnackbar('Failed to load clusters', 'error');
+      setClusters([]);
+      const message = handleApiError(error, 'Failed to load groups');
+      showSnackbar(message, 'error');
     } finally {
       setLoading(false);
     }
-  }, [announce, showSnackbar]);
+  }, [announce, showSnackbar, handleApiError]);
 
   const handleGenerate = async () => {
     setGenerating(true);
     try {
       const result = await api.generateClusters();
       if (result.status === 'success') {
-        showSnackbar(`Generated ${result.clusters_generated} clusters`, 'success');
+        showSnackbar(`Generated ${result.clusters_generated} groups`, 'success');
         fetchClusters();
       } else {
-        showSnackbar(result.message || 'Failed to generate clusters', 'error');
+        showSnackbar(result.message || 'Failed to generate groups', 'error');
       }
     } catch (error) {
-      showSnackbar('Failed to generate clusters', 'error');
+      const message = handleApiError(error, 'Failed to generate groups');
+      showSnackbar(message, 'error');
     } finally {
       setGenerating(false);
     }
@@ -380,7 +444,8 @@ function App() {
       showSnackbar('Support plan created successfully', 'success');
       setActionModal({ open: false, senior: null });
     } catch (error) {
-      showSnackbar('Failed to create support plan', 'error');
+      const message = handleApiError(error, 'Failed to create support plan');
+      showSnackbar(message, 'error');
     }
   };
 
@@ -395,7 +460,8 @@ function App() {
       showSnackbar('Data refreshed', 'success');
       fetchClusters();
     } catch (error) {
-      showSnackbar('Failed to refresh data', 'error');
+      const message = handleApiError(error, 'Failed to refresh data');
+      showSnackbar(message, 'error');
     }
   };
 
@@ -419,6 +485,18 @@ function App() {
             SeniorCare Pulse
           </Typography>
           <div sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {networkError && (
+              <Tooltip title="Connection issue - retrying automatically">
+                <Chip
+                  icon={<WifiOff fontSize="small" />}
+                  label="Offline"
+                  size="small"
+                  color="error"
+                  variant="filled"
+                  sx={{ fontWeight: 500 }}
+                />
+              </Tooltip>
+            )}
             {isSupported && (
               <Tooltip title={guidanceEnabled ? 'Turn off voice guidance' : 'Turn on voice guidance'}>
                 <IconButton
@@ -502,6 +580,7 @@ function App() {
           seniorId={actionsList.seniorId}
           onClose={() => setActionsList({ open: false, seniorId: null })}
           announce={announce}
+          handleApiError={handleApiError}
         />
       </Container>
 

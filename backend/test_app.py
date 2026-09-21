@@ -2,24 +2,45 @@ import os
 import tempfile
 import pytest
 import sqlite3
+import time
+from unittest.mock import patch, MagicMock
 
 
 def create_test_db():
     test_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
     os.environ['DATABASE_PATH'] = test_db.name
+    os.environ['DB_POOL_SIZE'] = '2'
+    os.environ['DB_TIMEOUT'] = '5.0'
     return test_db.name
 
 
 def get_db():
+    # Use direct connection for tests to avoid pool singleton issues
     conn = sqlite3.connect(os.environ['DATABASE_PATH'])
     conn.row_factory = sqlite3.Row
+    # Enable WAL mode and foreign keys like the pool does
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+@pytest.fixture(autouse=True)
+def reset_pool():
+    """Reset the database pool singleton before each test"""
+    from reliability import DatabasePool
+    DatabasePool._instance = None
+    DatabasePool._initialized = False
+    yield
+    DatabasePool._instance = None
+    DatabasePool._initialized = False
 
 
 @pytest.fixture
 def client():
     db_path = create_test_db()
     os.environ['DATABASE_PATH'] = db_path
+    os.environ['DB_POOL_SIZE'] = '2'
+    os.environ['DB_TIMEOUT'] = '5.0'
 
     from app import app, init_db, strip_phi
     app.config['TESTING'] = True
@@ -44,6 +65,7 @@ def test_health_endpoint(client):
     data = response.get_json()
     assert data['status'] == 'ok'
     assert 'timestamp' in data
+    assert data['database'] == 'ok'
 
 
 def test_clusters_endpoint_empty(client):
@@ -357,3 +379,155 @@ def test_ingest_data_strips_phi(client):
     row = cursor.fetchone()
     conn.close()
     assert 'REDACTED' not in row['health_conditions'] or row['health_conditions'] == 'arthritis'
+
+
+# Reliability tests
+
+def test_retry_policy_retries_on_failure():
+    from reliability import RetryPolicy
+    
+    call_count = [0]
+    
+    def failing_func():
+        call_count[0] += 1
+        if call_count[0] < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return "success"
+    
+    policy = RetryPolicy(max_attempts=3, base_delay=0.01, max_delay=0.1)
+    result = policy.execute(failing_func)
+    assert result == "success"
+    assert call_count[0] == 3
+
+
+def test_retry_policy_exhausts_retries():
+    from reliability import RetryPolicy
+    
+    call_count = [0]
+    
+    def always_fails():
+        call_count[0] += 1
+        raise sqlite3.OperationalError("database is locked")
+    
+    policy = RetryPolicy(max_attempts=3, base_delay=0.01, max_delay=0.1)
+    with pytest.raises(sqlite3.OperationalError):
+        policy.execute(always_fails)
+    assert call_count[0] == 3
+
+
+def test_circuit_breaker_opens_after_threshold():
+    from reliability import CircuitBreaker, CircuitBreakerOpenError
+    
+    breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=0.1)
+    
+    def failing_func():
+        raise ValueError("test error")
+    
+    # First 3 calls should fail and increment counter
+    for _ in range(3):
+        with pytest.raises(ValueError):
+            breaker.call(failing_func)
+    
+    # 4th call should raise CircuitBreakerOpenError
+    with pytest.raises(CircuitBreakerOpenError):
+        breaker.call(failing_func)
+    
+    assert breaker.state == "open"
+
+
+def test_circuit_breaker_recovers_after_timeout():
+    from reliability import CircuitBreaker, CircuitBreakerOpenError
+    
+    breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05)
+    
+    def failing_func():
+        raise ValueError("test error")
+    
+    def succeeding_func():
+        return "success"
+    
+    # Trigger circuit breaker open
+    for _ in range(2):
+        with pytest.raises(ValueError):
+            breaker.call(failing_func)
+    
+    assert breaker.state == "open"
+    
+    # Wait for recovery timeout
+    time.sleep(0.1)
+    
+    # Next call should be half-open and succeed
+    result = breaker.call(succeeding_func)
+    assert result == "success"
+    assert breaker.state == "closed"
+
+
+def test_database_pool_singleton():
+    from reliability import DatabasePool, get_db_pool
+    
+    pool1 = get_db_pool()
+    pool2 = get_db_pool()
+    assert pool1 is pool2
+    assert isinstance(pool1, DatabasePool)
+
+
+def test_database_pool_wal_mode():
+    from reliability import get_db_pool
+    
+    pool = get_db_pool()
+    with pool.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode")
+        mode = cursor.fetchone()[0]
+        assert mode.upper() == "WAL"
+
+
+def test_database_pool_foreign_keys():
+    from reliability import get_db_pool
+    
+    pool = get_db_pool()
+    with pool.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA foreign_keys")
+        fk = cursor.fetchone()[0]
+        assert fk == 1
+
+
+def test_database_pool_busy_timeout():
+    from reliability import get_db_pool
+    
+    pool = get_db_pool()
+    with pool.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA busy_timeout")
+        timeout = cursor.fetchone()[0]
+        assert timeout == 30000
+
+
+def test_health_check_reports_database_status(client):
+    response = client.get('/health')
+    assert response.status_code == 200
+    data = response.get_json()
+    assert 'database' in data
+    assert data['database'] in ('ok', 'degraded')
+
+
+def test_circuit_breaker_returns_503_when_open(client):
+    from reliability import db_circuit_breaker
+    from unittest.mock import patch
+    
+    # Force circuit breaker open
+    db_circuit_breaker.failure_count = 10
+    db_circuit_breaker.state = "open"
+    db_circuit_breaker.last_failure_time = time.time()
+    
+    try:
+        response = client.get('/clusters')
+        # Should return 503 when circuit breaker is open
+        assert response.status_code == 503
+        data = response.get_json()
+        assert data['status'] == 'error'
+        assert 'temporarily unavailable' in data['message'].lower()
+    finally:
+        # Reset circuit breaker
+        db_circuit_breaker.reset()

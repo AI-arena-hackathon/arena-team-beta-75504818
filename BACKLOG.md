@@ -25,6 +25,15 @@ you're actively working on in In Progress, add follow-ups to Todo.
   - "Create Action" → "Add Support Plan"
   - Voice announcements now sound natural and caring
   - PHI strip labels in API softened (e.g., "Digital Exclusion" → "Digital Access")
+- [x] **Reliability improvements: Database connection pooling, retry logic, circuit breakers**
+  - SQLite WAL mode, busy timeout, foreign keys, connection pooling
+  - RetryPolicy with exponential backoff and jitter for transient failures
+  - CircuitBreaker pattern for database operations (5 failure threshold, 30s recovery)
+  - Health check endpoint reports database connectivity status
+  - Frontend fetchWithRetry with exponential backoff, timeout, and AbortController
+  - ApiError class for structured error handling with status codes
+  - Network error indicator in UI with offline chip
+  - Comprehensive error logging on backend
 
 ## In Progress
 

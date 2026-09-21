@@ -1,81 +1,142 @@
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000';
 
+const DEFAULT_TIMEOUT = 10000;
+const MAX_RETRIES = 3;
+const BASE_DELAY = 500;
+const MAX_DELAY = 5000;
+
+class ApiError extends Error {
+  constructor(message, status, originalError) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.originalError = originalError;
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
+
+  const fetchOptions = {
+    ...options,
+    signal: controller.signal,
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, fetchOptions);
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new ApiError(
+          errorData.message || `HTTP ${response.status}: ${response.statusText}`,
+          response.status,
+          null
+        );
+      }
+
+      return response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+
+      if (error.name === 'AbortError') {
+        throw new ApiError('Request timeout', 408, error);
+      }
+
+      if (error instanceof ApiError) {
+        if (error.status >= 500 && error.status < 600) {
+          if (attempt < retries) {
+            const delay = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
+            const jitter = delay * 0.5 * Math.random();
+            await sleep(delay + jitter);
+            continue;
+          }
+        }
+        throw error;
+      }
+
+      if (attempt < retries) {
+        const delay = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
+        const jitter = delay * 0.5 * Math.random();
+        await sleep(delay + jitter);
+        continue;
+      }
+
+      throw new ApiError(error.message || 'Network error', 0, error);
+    }
+  }
+}
+
 export const api = {
   async health() {
-    const response = await fetch(`${API_BASE}/health`);
-    return response.json();
+    return fetchWithRetry(`${API_BASE}/health`);
   },
 
   async getClusters() {
-    const response = await fetch(`${API_BASE}/clusters`);
-    return response.json();
+    return fetchWithRetry(`${API_BASE}/clusters`);
   },
 
   async generateClusters() {
-    const response = await fetch(`${API_BASE}/clusters/generate`, {
+    return fetchWithRetry(`${API_BASE}/clusters/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    return response.json();
   },
 
   async createAction(seniorId, actionType, description) {
-    const response = await fetch(`${API_BASE}/action`, {
+    return fetchWithRetry(`${API_BASE}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ senior_id: seniorId, action_type: actionType, description }),
     });
-    return response.json();
   },
 
   async getActions(seniorId) {
-    const response = await fetch(`${API_BASE}/actions/${seniorId}`);
-    return response.json();
+    return fetchWithRetry(`${API_BASE}/actions/${seniorId}`);
   },
 
   async completeAction(actionId) {
-    const response = await fetch(`${API_BASE}/action/${actionId}/complete`, {
+    return fetchWithRetry(`${API_BASE}/action/${actionId}/complete`, {
       method: 'POST',
     });
-    return response.json();
   },
 
   async refreshData() {
-    const response = await fetch(`${API_BASE}/data/refresh`, {
+    return fetchWithRetry(`${API_BASE}/data/refresh`, {
       method: 'POST',
     });
-    return response.json();
   },
 
   async getConsent(seniorId) {
-    const response = await fetch(`${API_BASE}/consent/${seniorId}`);
-    return response.json();
+    return fetchWithRetry(`${API_BASE}/consent/${seniorId}`);
   },
 
   async updateConsent(seniorId, consentGiven) {
-    const response = await fetch(`${API_BASE}/consent/${seniorId}`, {
+    return fetchWithRetry(`${API_BASE}/consent/${seniorId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ consent_given: consentGiven }),
     });
-    return response.json();
   },
 
   async getDisclaimer() {
-    const response = await fetch(`${API_BASE}/compliance/disclaimer`);
-    return response.json();
+    return fetchWithRetry(`${API_BASE}/compliance/disclaimer`);
   },
 
   async runRetention() {
-    const response = await fetch(`${API_BASE}/compliance/retention`, {
+    return fetchWithRetry(`${API_BASE}/compliance/retention`, {
       method: 'POST',
     });
-    return response.json();
   },
 
   async getRetentionLog() {
-    const response = await fetch(`${API_BASE}/compliance/retention/log`);
-    return response.json();
+    return fetchWithRetry(`${API_BASE}/compliance/retention/log`);
   },
 };
 
@@ -98,3 +159,5 @@ export const getPainPointColor = (point) => {
   };
   return colors[point] || '#757575';
 };
+
+export { ApiError };
