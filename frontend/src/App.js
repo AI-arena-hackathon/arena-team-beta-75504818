@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import {
   Container,
   AppBar,
@@ -29,15 +29,78 @@ import { VolumeUp, VolumeOff, Refresh, Add, CheckCircle, HelpOutline } from '@mu
 import { useVoiceGuidance } from './hooks/useVoice';
 import { api, formatPainPoint, getPainPointColor } from './utils/api';
 
-function ClusterCard({ cluster, onActionClick, announce }) {
+const ClusterCard = memo(function ClusterCard({ cluster, onActionClick, announce }) {
   const [expanded, setExpanded] = useState(false);
 
-  const handleExpand = () => {
-    setExpanded(!expanded);
+  const handleExpand = useCallback(() => {
+    setExpanded(prev => !prev);
     if (!expanded) {
       announce(`Cluster ${cluster.id + 1} expanded. ${cluster.count} seniors.`);
     }
-  };
+  }, [expanded, cluster.id, cluster.count, announce]);
+
+  const painPointsChips = useMemo(() => {
+    if (!cluster.pain_points || cluster.pain_points.length === 0) return null;
+    return (
+      <div sx={{ mb: 2 }}>
+        <Typography variant="h6" sx={{ mb: 1 }}>Pain Points:</Typography>
+        <div sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+          {cluster.pain_points.map((point, index) => (
+            <Chip
+              key={point}
+              label={formatPainPoint(point)}
+              size="small"
+              color="default"
+              variant="filled"
+              sx={{
+                backgroundColor: getPainPointColor(point),
+                color: point === 'digital_exclusion' ? '#000' : '#fff',
+                fontWeight: 500,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }, [cluster.pain_points]);
+
+  const seniorsList = useMemo(() => {
+    const visibleSeniors = cluster.seniors.slice(0, 10);
+    return (
+      <List dense>
+        {visibleSeniors.map((senior) => (
+          <ListItem key={senior.id} divider sx={{ py: 1 }}>
+            <ListItemText
+              primary={<Typography variant="body1">Senior #{senior.id} - Age {senior.age}</Typography>}
+              secondary={
+                <Typography variant="body2">
+                  Mobility: {senior.mobility_flag ? 'Needs Support' : 'Independent'} |{' '}
+                  Digital: {senior.digital_engagement ? 'Engaged' : 'Not Engaged'}
+                </Typography>
+              }
+            />
+            <ListItemSecondaryAction>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={() => onActionClick(senior)}
+                aria-label={`Create action for senior ${senior.id}`}
+              >
+                <Add fontSize="small" /> Action
+              </Button>
+            </ListItemSecondaryAction>
+          </ListItem>
+        ))}
+        {cluster.seniors.length > 10 && (
+          <ListItem>
+            <Typography variant="body2" color="text.secondary">
+              ... and {cluster.seniors.length - 10} more seniors
+            </Typography>
+          </ListItem>
+        )}
+      </List>
+    );
+  }, [cluster.seniors, onActionClick]);
 
   return (
     <Card sx={{ mb: 3, minHeight: '100%' }}>
@@ -65,27 +128,7 @@ function ClusterCard({ cluster, onActionClick, announce }) {
           </Typography>
         )}
 
-        {cluster.pain_points && cluster.pain_points.length > 0 && (
-          <div sx={{ mb: 2 }}>
-            <Typography variant="h6" sx={{ mb: 1 }}>Pain Points:</Typography>
-            <div sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {cluster.pain_points.map((point, index) => (
-                <Chip
-                  key={index}
-                  label={formatPainPoint(point)}
-                  size="small"
-                  color="default"
-                  variant="filled"
-                  sx={{
-                    backgroundColor: getPainPointColor(point),
-                    color: point === 'digital_exclusion' ? '#000' : '#fff',
-                    fontWeight: 500,
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        )}
+        {painPointsChips}
 
         <Accordion expanded={expanded} onChange={handleExpand} sx={{ mt: 2 }}>
           <AccordionSummary
@@ -96,44 +139,13 @@ function ClusterCard({ cluster, onActionClick, announce }) {
             <Typography variant="body1">View Seniors & Actions</Typography>
           </AccordionSummary>
           <AccordionDetails>
-            <List dense>
-              {cluster.seniors.slice(0, 10).map((senior) => (
-                <ListItem key={senior.id} divider sx={{ py: 1 }}>
-                  <ListItemText
-                    primary={<Typography variant="body1">Senior #{senior.id} - Age {senior.age}</Typography>}
-                    secondary={
-                      <Typography variant="body2">
-                        Mobility: {senior.mobility_flag ? 'Needs Support' : 'Independent'} |{' '}
-                        Digital: {senior.digital_engagement ? 'Engaged' : 'Not Engaged'}
-                      </Typography>
-                    }
-                  />
-                  <ListItemSecondaryAction>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      onClick={() => onActionClick(senior)}
-                      aria-label={`Create action for senior ${senior.id}`}
-                    >
-                      <Add fontSize="small" /> Action
-                    </Button>
-                  </ListItemSecondaryAction>
-                </ListItem>
-              ))}
-              {cluster.seniors.length > 10 && (
-                <ListItem>
-                  <Typography variant="body2" color="text.secondary">
-                    ... and {cluster.seniors.length - 10} more seniors
-                  </Typography>
-                </ListItem>
-              )}
-            </List>
+            {seniorsList}
           </AccordionDetails>
         </Accordion>
       </CardContent>
     </Card>
   );
-}
+});
 
 function ActionModal({ open, senior, onClose, onSubmit, announce }) {
   const [actionType, setActionType] = useState('exercise');
