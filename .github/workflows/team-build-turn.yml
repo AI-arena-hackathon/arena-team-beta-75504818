@@ -44,6 +44,11 @@ on:
         required: false
         default: "opencode/nemotron-3-ultra-free"
         type: string
+      fallback_model:
+        description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
+        required: false
+        default: "opencode/big-pickle"
+        type: string
   repository_dispatch:
     types: [team-build-turn]
 
@@ -205,6 +210,34 @@ jobs:
         #       (never a silent 'cancelled') and the scheduler dispatches the
         #       next turn minutes later instead of 120 minutes later.
         id: agent
+        env:
+          # Passed via environment, NOT interpolated into the script below:
+          # task_prompt is agent-influenced markdown and routinely contains
+          # backticks, which bash executes inside double quotes (found live
+          # 2026-09-22: a BACKLOG table row with `utm_*` killed 12 straight
+          # turns with exit 127 before docker ever ran). Env values are set
+          # without shell parsing, and expansions are never rescanned — so
+          # the same content passes through intact here.
+          TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
+          # Same mechanism for the keys, and for a subtler reason: secrets.*
+          # do NOT exist as variables in the runner shell — they only
+          # materialize via ${{ }} substitution. Referencing $OPENCODE_API_KEY
+          # directly in bash silently yields EMPTY (found live 2026-09-23:
+          # test 002 ran its whole turn on an empty key and died on a
+          # misleading Nvidia 503). Only the ACTIVE key is passed into the
+          # container (-e ZEN_ACTIVE_KEY below), so the sandbox never holds
+          # the spare pool's key.
+          ZEN_KEY_1: ${{ secrets.OPENCODE_API_KEY }}
+          ZEN_KEY_2: ${{ secrets.OPENCODE_API_KEY_2 }}
+          # Model ids via env for the same interpolation reason as the prompt
+          # (dispatch-controlled values, never inline). MODEL is the pinned
+          # build model; FALLBACK_MODEL is attempt 3 when both pools fail the
+          # pinned model — upstream-outage survival (proven live 2026-09-24:
+          # big-pickle built clean through a 19h Nvidia outage that killed
+          # nemotron on both pools). Empty/missing falls back to the pinned
+          # model, which disables attempt 3 without touching the logic below.
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'opencode/nemotron-3-ultra-free' }}
+          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'opencode/big-pickle' }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
@@ -234,6 +267,44 @@ jobs:
             fi
           done
 
+          # Key selection: pinned pool first, other pool as failover.
+          if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$ZEN_KEY_2" ]; then
+            PRIMARY_KEY="$ZEN_KEY_2"
+            FALLBACK_KEY="$ZEN_KEY_1"
+          else
+            PRIMARY_KEY="$ZEN_KEY_1"
+            FALLBACK_KEY="$ZEN_KEY_2"
+          fi
+          if [ -z "$PRIMARY_KEY" ] && [ -n "$FALLBACK_KEY" ]; then
+            echo "::warning::Pinned pool key is empty — starting on the failover pool"
+            PRIMARY_KEY="$FALLBACK_KEY"
+            FALLBACK_KEY=""
+          fi
+          if [ -z "$PRIMARY_KEY" ]; then
+            echo "::error::Neither Zen pool key is configured (OPENCODE_API_KEY and OPENCODE_API_KEY_2 are both empty) — refusing to run a turn with no credentials"
+            exit 1
+          fi
+
+          # One function, up to three calls: pinned attempt, pool failover,
+          # model failover. Body kept at step indent — bash doesn't care, and
+          # it keeps the diff reviewable. Globals (code, TIMED_OUT) are
+          # intentionally NOT local: the failover decisions below read them.
+          run_attempt() {
+            ATTEMPT_KEY="$1"
+            ATTEMPT_MODEL="$2"
+          # One Zen key per team, pinned by repo name (*alpha* -> key 1,
+          # *beta* -> key 2 when present), WITH same-turn failover: if the
+          # pinned pool errors (429/quota/5xx signature in the turn logs)
+          # the attempt's logs are archived and the turn re-runs once on the
+          # other pool, then once more on FALLBACK_MODEL (different upstream —
+          # survives upstream outages that kill both pools identically).
+          # Healthy turns always take exactly one attempt on the pinned
+          # key+model, so attribution stays clean while a dead pool costs one
+          # failed attempt, not a dead team. Kept ABOVE `docker run`: comment
+          # lines inside the -e chain break it (`-e: command not found`,
+          # found live 2026-09-23).
+          # Caveat from Groq: separate pools only if the keys belong to
+          # SEPARATE accounts. Unset _2 behaves exactly like before.
           # Git identity via env, not `git config`: with .git/config mounted
           # read-only (see RO_MOUNTS above), `git config user.name` would
           # fail with "could not lock config file" and every agent commit
@@ -250,15 +321,9 @@ jobs:
             -e HTTP_PROXY=http://host.docker.internal:3128 \
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
-            # Two Zen keys, one picked at random per turn (same pattern as the
-            # old GROQ_API_KEY split): spreads burst load AND survives one key
-            # hitting a limit. Caveat learned the hard way on Groq — this only
-            # doubles anything if the keys belong to SEPARATE accounts (limits
-            # are per-account); two keys on one account share one pool and the
-            # pick below is then just jitter. Harmless either way; unset _2
-            # behaves exactly like before.
-            -e OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }} \
-            -e OPENCODE_API_KEY_2=${{ secrets.OPENCODE_API_KEY_2 }} \
+            -e ZEN_ACTIVE_KEY="$ATTEMPT_KEY" \
+            -e ZEN_MODEL="$ATTEMPT_MODEL" \
+            -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
             -e GIT_AUTHOR_EMAIL=arena-turn-agent@users.noreply.github.com \
@@ -267,7 +332,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$OPENCODE_API_KEY" && if [ -n "$OPENCODE_API_KEY_2" ] && [ "$((RANDOM % 2))" = "0" ]; then KEY="$OPENCODE_API_KEY_2"; fi && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$ZEN_ACTIVE_KEY" && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "$ZEN_MODEL" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
@@ -303,7 +368,7 @@ jobs:
             # misses same-file edits, but the BYTES signal covers those:
             # opencode emits a JSON event per step, so a working agent grows
             # the log constantly regardless of which file it edits.
-            CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' 2>/dev/null | wc -l)
+            CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' 2>/dev/null | wc -l)
             NOW=$(date +%s)
             if [ "$BYTES" != "$LAST_BYTES" ] || [ "${CHANGED:-0}" != "$LAST_CHANGED" ]; then
               LAST_BYTES=$BYTES
@@ -325,6 +390,37 @@ jobs:
             echo "opencode was killed by the silence watchdog after ${WATCHDOG_SILENCE_MINUTES} min of no activity (exit ${code})"
           else
             echo "opencode exited $code"
+          fi
+          }  # end run_attempt
+
+          # Failover triggers: the attempt died AND the logs carry a provider
+          # signature (quota/429/5xx/dead model). Anything else (essay with
+          # exit 0, backtick-style 127, empty output) retries elsewhere would
+          # be pointless — those fail identically there. Attempt 2 switches
+          # POOL (same model, per-account quota); attempt 3 switches MODEL
+          # (different upstream — survives upstream outages that kill both
+          # pools identically). Attempt 3 is skipped when FALLBACK_MODEL
+          # equals MODEL (same model twice would be a pointless re-run).
+          provider_error() {
+            grep -qiE "FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
+              opencode-turn.log opencode-turn.err.log 2>/dev/null
+          }
+          attempt_failed() {
+            { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && provider_error
+          }
+
+          run_attempt "$PRIMARY_KEY" "$MODEL"
+          if attempt_failed && [ -n "$FALLBACK_KEY" ] && [ "$FALLBACK_KEY" != "$PRIMARY_KEY" ]; then
+            echo "::warning::Pinned pool errored (provider signature in logs) — failing over to the other pool for one retry"
+            mv opencode-turn.log opencode-turn.attempt1.log 2>/dev/null || true
+            mv opencode-turn.err.log opencode-turn.attempt1.err.log 2>/dev/null || true
+            run_attempt "$FALLBACK_KEY" "$MODEL"
+            if attempt_failed && [ -n "$FALLBACK_MODEL" ] && [ "$FALLBACK_MODEL" != "$MODEL" ]; then
+              echo "::warning::Both pools errored on $MODEL (provider signature in logs) — failing over to model $FALLBACK_MODEL for one retry"
+              mv opencode-turn.log opencode-turn.attempt2.log 2>/dev/null || true
+              mv opencode-turn.err.log opencode-turn.attempt2.err.log 2>/dev/null || true
+              run_attempt "$PRIMARY_KEY" "$FALLBACK_MODEL"
+            fi
           fi
           exit 0
         # --auto approves OpenCode's own permission prompts (needed since
@@ -348,7 +444,7 @@ jobs:
           echo "--- stderr ---"
           cat opencode-turn.err.log 2>/dev/null || echo "opencode-turn.err.log not found"
           echo "--- crash/provider-error signature (empty means neither the P0-0a id bug recurred nor the provider errored) ---"
-          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement" \
+          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
             opencode-turn.log opencode-turn.err.log 2>/dev/null || true
 
       - name: Enforce real build output
@@ -363,7 +459,16 @@ jobs:
         run: |
           START_HEAD="${{ steps.turnstart.outputs.head }}"
           NOW_HEAD=$(git rev-parse HEAD)
-          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log')
+          # Lockfile exclusions above exist because npm/pip rewrite lockfiles
+          # as a side effect of installing dependencies. Found live 2026-09-28
+          # (three times in one day): a turn that wrote NO product code still
+          # produced a "file change" — a bare `"license": "MIT"` line npm added
+          # to package-lock.json — which satisfied this very gate and let a
+          # no-op turn report success. The gate exists to catch exactly that
+          # (P0-0a), so churn must not count as output. A turn that ONLY adds
+          # or removes a dependency is still real work and is NOT excluded —
+          # package.json always counts.
+          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml' ':!poetry.lock' ':!uv.lock' ':!Cargo.lock' ':!composer.lock' ':!go.sum')
           if [ -z "$CHANGED" ] && [ "$NOW_HEAD" = "$START_HEAD" ]; then
             echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."
             exit 1
@@ -408,8 +513,8 @@ jobs:
         id: install
         run: |
           set +e
-          # Bounded retry (whole-arena sim finding, docs/ARCHITECTURE_COMPARISON.md
-          # A6: one-shot flaky verification cost ~10pp end-to-end winner accuracy
+          # Bounded retry (whole-arena sim finding, docs/ARENA_CONDUCT_V3.md
+          # §10: one-shot flaky verification cost ~10pp end-to-end winner accuracy
           # — a single transient registry/network hiccup flipped a turn to
           # 'failure' that a retry would have passed, and over a multi-turn event
           # that compounds into wrong winners). npm ci / pip install over the
@@ -742,6 +847,46 @@ jobs:
             echo "$NON_SAMPLE_HOOKS" | xargs -r rm -f
           fi
           git add -A
+          # Lockfile-restore guard (2026-09-28): `git add -A` above sweeps up
+          # whatever the install phase's package manager rewrote. Restore any
+          # lockfile whose ONLY change this turn was metadata churn, so a
+          # dependency-install side effect never becomes a committed "result".
+          # Deliberately narrow, and it runs BEFORE the commit below so a turn
+          # with real product work commits it untouched:
+          #   - fires only when no non-lockfile file changed this turn;
+          #   - `git checkout` restores content, so a lockfile the agent
+          #     genuinely rewrote alongside real work still gets restored
+          #     ONLY if nothing else changed — otherwise it is left alone;
+          #   - VERIFICATION_FAILURE.log is NEVER restored: it is the
+          #     next turn's required reading and must reach history.
+          REAL_CHANGES=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml' ':!poetry.lock' ':!uv.lock' ':!Cargo.lock' ':!composer.lock' ':!go.sum' | grep -v 'VERIFICATION_FAILURE.log' || true)
+          if [ -z "$REAL_CHANGES" ]; then
+            LOCK_CHURN=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' ':!VERIFICATION_FAILURE.log' | awk '{print $NF}' | grep -E '(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|uv\.lock|Cargo\.lock|composer\.lock|go\.sum)$' || true)
+            if [ -n "$LOCK_CHURN" ]; then
+              echo "::warning::Only dependency-lockfile metadata changed this turn (install side effect, not product work) — restoring instead of committing:"
+              echo "$LOCK_CHURN" | sed 's/^/    /'
+              for f in $LOCK_CHURN; do
+                # `git checkout HEAD -- <path>` (not bare `git checkout --`):
+                # this step runs AFTER `git add -A`, so the churn is already
+                # staged and a bare checkout would restore from the index —
+                # a no-op. Restoring from HEAD updates index AND worktree, so
+                # the file ends up clean and the later commit skips it.
+                # "Exists in HEAD?" — NOT `git ls-files`, which lists the
+                # INDEX: `git add -A` above has already staged a brand-new
+                # lockfile, so ls-files calls it known and a bare checkout
+                # then fails with "pathspec did not match". cat-file against
+                # HEAD is the only correct test (scratch cases 1-6).
+                if git cat-file -e "HEAD:$f" 2>/dev/null; then
+                  git checkout HEAD -- "$f" || true
+                else
+                  # Newly created lockfile: `git rm -f` drops it from index AND
+                  # worktree. `git clean` cannot - the file is staged, so it is
+                  # no longer "untracked" as far as git is concerned.
+                  git rm -f -q -- "$f" >/dev/null 2>&1 || true
+                fi
+              done
+            fi
+          fi
           git diff --cached --quiet || git commit -m "Build turn ${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}"
           if [ -n "$ARENA_PUSH_TOKEN" ]; then
             # actions/checkout sets an http.extraheader with GITHUB_TOKEN
