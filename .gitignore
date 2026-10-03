@@ -28,3 +28,12 @@ Thumbs.db
 .idea/
 .vscode/
 /.pydeps/
+
+
+# Arena verification artifacts - tracked on purpose.
+# The verify step writes these; the turn prompt tells the next agent to read
+# them. A blanket *.log above would make git add -A skip them, so they
+# would never reach the repo. Appended by the arena, not overwriting: agents
+# add their own entries here (e.g. /.pydeps/) and those must survive.
+!VERIFICATION_FAILURE.log
+!VERIFICATION_NOTE.log
